@@ -5070,7 +5070,7 @@ function safeRecalculateWarehouseBalances() {
     logToSheet('INFO', 'safeRecalculateWarehouseBalances', 'Запуск основного пересчета');
     
     // ВАЖНО: Вызываем основную функцию пересчета!
-    var recalculationResult = fullRecalculateWarehouseBalances();
+    var recalculationResult = fastRecalculateBalancesWithTransferChain();
     
     // 5. ФОРМИРОВАНИЕ ИТОГОВОГО ОТЧЕТА
     var endTime = new Date();
