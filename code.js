@@ -6723,32 +6723,50 @@ function getChronologicallySortedTransfers(componentName, allTransfers) {
 }
 
 /**
- * Валидация данных перед пересчетом
+ * Простая проверка данных (упрощенная версия)
  */
 function validateDataBeforeRecalculation() {
-  var issues = [];
-  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  
-  // Проверяем существование листов
-  var requiredSheets = [
-    MAIN_WAREHOUSE_SHEET,
-    TRANSFERS_SHEET,
-    PURCHASES_SHEET
-  ];
-  
-  requiredSheets.forEach(function(sheetName) {
-    var sheet = spreadsheet.getSheetByName(sheetName);
-    if (!sheet) {
-      issues.push('Отсутствует лист: ' + sheetName);
-    } else if (sheet.getLastRow() <= 1) {
-      issues.push('Лист пустой: ' + sheetName);
+  try {
+    var issues = [];
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Проверяем обязательные листы
+    var requiredSheets = [
+      { name: MAIN_WAREHOUSE_SHEET, title: 'Склад Главный' },
+      { name: TRANSFERS_SHEET, title: 'Перемещения' }
+    ];
+    
+    for (var i = 0; i < requiredSheets.length; i++) {
+      var sheet = spreadsheet.getSheetByName(requiredSheets[i].name);
+      
+      if (!sheet) {
+        issues.push('❌ Отсутствует лист: ' + requiredSheets[i].title);
+        continue;
+      }
+      
+      var lastRow = sheet.getLastRow();
+      var lastCol = sheet.getLastColumn();
+      
+      if (lastRow <= 1) {
+        issues.push('⚠️ Лист "' + requiredSheets[i].title + '" пуст или содержит только заголовки');
+      }
+      
+      if (lastCol < 6) {
+        issues.push('⚠️ В листе "' + requiredSheets[i].title + '" меньше 6 колонок');
+      }
     }
-  });
-  
-  return {
-    isValid: issues.length === 0,
-    issues: issues
-  };
+    
+    return {
+      isValid: issues.length === 0,
+      issues: issues
+    };
+    
+  } catch (error) {
+    return {
+      isValid: false,
+      issues: ['Ошибка при проверке: ' + error.message]
+    };
+  }
 }
 
 /**
