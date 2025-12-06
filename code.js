@@ -5053,300 +5053,147 @@ function createBackup() {
 }
 
 /**
-* 🔥 ОБНОВЛЕННАЯ ФУНКЦИЯ: УСКОРЕННАЯ ПЕРЕСЧЕТ ОСТАТКОВ С СОХРАНЕНИЕМ ЦЕПОЧКИ
-*/
+ * Полный пересчет остатков с учетом цепочек перемещений (исправленная версия)
+ */
 function fastRecalculateBalancesWithTransferChain() {
   try {
-    console.log('🚀 ЗАПУСК ПЕРЕСЧЕТА С СОХРАНЕНИЕМ ЦЕПОЧКИ ПЕРЕМЕЩЕНИЙ...');
-    
+    var ui = SpreadsheetApp.getUi();
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Блокируем интерфейс на время выполнения
+    ui.alert('🔄 Пересчет остатков', 
+      'Начался полный пересчет остатков. Это может занять несколько минут.\n\n' +
+      'Не закрывайте таблицу и не вносите изменения во время расчета.',
+      ui.ButtonSet.OK);
+    
+    // 1. Получаем все данные
+    var warehouseSheet = spreadsheet.getSheetByName(MAIN_WAREHOUSE_SHEET);
     var transfersSheet = spreadsheet.getSheetByName(TRANSFERS_SHEET);
-    
-    if (!transfersSheet || transfersSheet.getLastRow() <= 1) {
-      throw new Error('Лист перемещений пуст или не найден');
-    }
-    
-    // Получаем все данные перемещений
-    var transfersData = transfersSheet.getRange('A2:I' + transfersSheet.getLastRow()).getValues();
-    
-    // Создаем карту цепочки перемещений
-    var transferMaps = createTransferChainMap(transfersData);
-    
-    // 🔥 ИСПРАВЛЕНИЕ: Правильное использование переменной transferMaps вместо createtransferChainMap
-    var warehouseData = {
-      'Главный': {},
-      'Производство': {}
-    };
-    
-    // 1. Обрабатываем начальные перемещения от поставщика
-    for (var purchaseId in transferMaps.purchaseMap) {
-      var initialTransfers = transferMaps.purchaseMap[purchaseId];
-      for (var j = 0; j < initialTransfers.length; j++) {
-        var transfer = initialTransfers[j];
-        var warehouseName = 'Главный'; // По умолчанию на главный склад
-        
-        // Определяем склад назначения из данных закупки
-        var purchaseDetails = getPurchaseDetails(purchaseId);
-        if (purchaseDetails.success && purchaseDetails.targetWarehouse) {
-          warehouseName = purchaseDetails.targetWarehouse.toString().trim().toLowerCase().indexOf('производ') !== -1 ? 
-                         'Производство' : 'Главный';
-        }
-        
-        warehouseData[warehouseName][transfer.transferId] = {
-          component: transfer.component,
-          quantity: transfer.quantity,
-          purchaseId: purchaseId,
-          date: transfer.date,
-          originalTransferId: transfer.transferId,
-          type: 'purchase'
-        };
-      }
-    }
-    
-    // 2. Обрабатываем цепочки перемещений между складами
-    for (var sourceId in transferMaps.chainMap) {
-      var chainTransfers = transferMaps.chainMap[sourceId];
-      
-      for (var k = 0; k < chainTransfers.length; k++) {
-        var chainTransfer = chainTransfers[k];
-        
-        // Находим исходную партию
-        var sourceBatch = null;
-        for (var warehouse in warehouseData) {
-          if (warehouseData[warehouse][sourceId]) {
-            sourceBatch = warehouseData[warehouse][sourceId];
-            break;
-          }
-        }
-        
-        if (sourceBatch && sourceBatch.quantity >= chainTransfer.quantity) {
-          // Уменьшаем исходную партию
-          sourceBatch.quantity -= chainTransfer.quantity;
-          
-          // Создаем новую запись на целевом складе
-          warehouseData[chainTransfer.to][chainTransfer.newTransferId] = {
-            component: chainTransfer.component,
-            quantity: chainTransfer.quantity,
-            purchaseId: sourceBatch.purchaseId,
-            date: chainTransfer.date,
-            originalTransferId: chainTransfer.newTransferId,
-            type: 'transfer',
-            sourceTransferId: sourceId // 🔥 СОХРАНЯЕМ СВЯЗЬ С ИСХОДНЫМ ПЕРЕМЕЩЕНИЕМ
-          };
-        }
-      }
-    }
-    
-    // 🔥 ИСПРАВЛЕНИЕ: Правильное использование переменной transferMaps
-    console.log('📋 Карта цепочек перемещений создана: ' + Object.keys(transferMaps.chainMap).length + ' записей');
-
-    // ========== 1. ОБРАБОТКА ЗАКУПОК С СОХРАНЕНИЕМ ИСХОДНЫХ ДАННЫХ ==========
-    console.log('\n💰 ЭТАП 1: ОБРАБОТКА ЗАКУПОК С СОХРАНЕНИЕМ ЦЕПОЧКИ');
-    var processedPurchases = 0;
-    
-    // 🔥 ИСПРАВЛЕНИЕ: Добавляем отсутствующую переменную purchasesSheet
     var purchasesSheet = spreadsheet.getSheetByName(PURCHASES_SHEET);
     
-    if (purchasesSheet.getLastRow() > 1) {
-      var purchasesData = purchasesSheet.getRange('A2:I' + purchasesSheet.getLastRow()).getValues();
+    var lastWarehouseRow = warehouseSheet.getLastRow();
+    var lastTransferRow = transfersSheet.getLastRow();
+    var lastPurchaseRow = purchasesSheet.getLastRow();
+    
+    // 2. Загружаем данные пачками
+    var warehouseData = lastWarehouseRow > 1 ? 
+      warehouseSheet.getRange(2, 1, lastWarehouseRow - 1, 6).getValues() : [];
+    var transfersData = lastTransferRow > 1 ? 
+      transfersSheet.getRange(2, 1, lastTransferRow - 1, 8).getValues() : [];
+    var purchasesData = lastPurchaseRow > 1 ? 
+      purchasesSheet.getRange(2, 1, lastPurchaseRow - 1, 10).getValues() : [];
+    
+    // 3. Создаем карту остатков
+    var balancesMap = {};
+    
+    // 4. Обрабатываем каждое перемещение в хронологическом порядке
+    // Сначала сортируем все перемещения по дате
+    transfersData.sort(function(a, b) {
+      return new Date(a[2]) - new Date(b[2]); // Дата в колонке C
+    });
+    
+    // 5. Пересчитываем остатки
+    transfersData.forEach(function(transfer, index) {
+      var component = transfer[3]; // Название компонента
+      var quantity = Number(transfer[4]) || 0; // Количество
+      var type = transfer[5]; // Тип операции (приход/расход)
+      var transferId = transfer[0]; // ID перемещения
       
-      for (var i = 0; i < purchasesData.length; i++) {
-        var pRow = purchasesData[i];
-        var purchaseId = pRow[0];
-        var component = pRow[2];
-        var quantity = roundToTwo(pRow[3] || 0);
-        var targetWarehouse = pRow[7];
-        var status = pRow[8];
-        var purchaseDate = pRow[1];
-        
-        if (!component || !purchaseId || status !== 'Получено' || quantity <= 0) {
-          continue;
-        }
-        
-        // Определяем склад назначения
-        var warehouseName = 'Главный';
-        if (targetWarehouse && targetWarehouse.toString().trim().toLowerCase().indexOf('производ') !== -1) {
-          warehouseName = 'Производство';
-        }
-        
-        // 🔥 ИСПРАВЛЕНИЕ: Используем правильную переменную transferMaps
-        var transferIdForPurchase = findTransferIdForPurchase(transferMaps, purchaseId, component);
-        
-        if (!transferIdForPurchase) {
-          // Если перемещение не найдено, создаем виртуальный ID
-          transferIdForPurchase = PURCHASE_ID_PREFIX + purchaseId + '-INIT';
-          console.log('     ℹ️ Для закупки ' + purchaseId + ' создан ID: ' + transferIdForPurchase);
-        } else {
-          console.log('    ✅ Для закупки ' + purchaseId + ' найден ID перемещения: ' + transferIdForPurchase);
-        }
-        
-        // 🔥 СОХРАНЯЕМ ИСХОДНЫЕ ДАННЫЕ ЗАКУПКИ
-        warehouseData[warehouseName][transferIdForPurchase] = {
-          component: component,
-          quantity: quantity,
-          purchaseId: purchaseId,
-          date: purchaseDate || new Date(),
-          originalTransferId: transferIdForPurchase,
-          type: 'purchase',
-          // 🔥 ВАЖНОЕ ИСПРАВЛЕНИЕ: Сохраняем информацию о цепочке
-          sourceTransferId: null, // Закупка - начальное звено цепочки
-          isInitialPurchase: true
+      if (!component) return;
+      
+      // Инициализируем запись для компонента
+      if (!balancesMap[component]) {
+        balancesMap[component] = {
+          balance: 0,
+          transfers: [],
+          lastTransferId: ''
         };
-        
-        processedPurchases++;
-        console.log('   ✅ Закупка: ' + component + ' × ' + quantity + ' на ' + warehouseName + 
-                   ' (ID перемещения: ' + transferIdForPurchase + ')');
-      }
-    }
-    
-    console.log('💰 Обработано закупок: ' + processedPurchases);
-
-    // ========== 2. ОБРАБОТКА ПЕРЕМЕЩЕНИЙ С СОХРАНЕНИЕМ ЦЕПОЧКИ ==========
-    console.log('\n🔄 ЭТАП 2: ОБРАБОТКА ПЕРЕМЕЩЕНИЙ С СОХРАНЕНИЕМ ЦЕПОЧКИ');
-    var processedTransfers = 0;
-    
-    // 🔥 ИСПРАВЛЕНИЕ: Используем правильную переменную transferMaps
-    var sortedTransfers = getChronologicallySortedTransfers(transferMaps);
-    
-    for (var t = 0; t < sortedTransfers.length; t++) {
-      var transferInfo = sortedTransfers[t];
-      var transferId = transferInfo.transferId;
-      var purchaseId = transferInfo.purchaseId;
-      var component = transferInfo.component;
-      var quantity = transferInfo.quantity;
-      var fromWarehouse = transferInfo.fromWarehouse;
-      var toWarehouse = transferInfo.toWarehouse;
-      var transferDate = transferInfo.transferDate;
-      var sourceTransferId = transferInfo.sourceTransferId;
-      
-      // Определяем склады
-      var fromWhName = fromWarehouse.toString().trim().toLowerCase().indexOf('производ') !== -1 ? 'Производство' : 'Главный';
-      var toWhName = toWarehouse.toString().trim().toLowerCase().indexOf('производ') !== -1 ? 'Производство' : 'Главный';
-      
-      // 🔥 ВАЖНОЕ ИСПРАВЛЕНИЕ: ПРОПУСКАЕМ ПЕРЕМЕЩЕНИЯ ОТ ПОСТАВЩИКА (уже обработаны в закупках)
-      if (fromWarehouse.toString().trim().toLowerCase().indexOf('поставщик') !== -1) {
-        console.log('    ️ Пропускаем перемещение от поставщика: ' + transferId);
-        continue;
       }
       
-      console.log('     🔄 Обработка перемещения ' + transferId + ': ' + component + ' × ' + quantity + 
-                 ' из ' + fromWhName + ' в ' + toWhName);
-      
-      // 🔥 ИСПРАВЛЕНИЕ: ИЩЕМ ИСХОДНУЮ ПАРТИЮ НА СКЛАДЕ-ИСТОЧНИКЕ
-      var sourceBatch = findSourceBatch(warehouseData[fromWhName], sourceTransferId, component, quantity);
-      
-      if (sourceBatch) {
-        // Уменьшаем остаток на складе-источнике
-        sourceBatch.quantity = roundToTwo(sourceBatch.quantity - quantity);
-        console.log('       ➖ Списано с ' + fromWhName + ': ' + quantity + ' ед. (остаток: ' + sourceBatch.quantity + ')');
-        
-        // 🔥 ВАЖНОЕ ИСПРАВЛЕНИЕ: СОЗДАЕМ НОВУЮ ЗАПИСЬ НА ЦЕЛЕВОМ СКЛАДЕ С СОХРАНЕНИЕМ ЦЕПОЧКИ
-        warehouseData[toWhName][transferId] = {
-          component: component,
-          quantity: quantity,
-          purchaseId: purchaseId,
-          date: transferDate || new Date(),
-          originalTransferId: transferId,
-          type: 'transfer',
-          // 🔥 СОХРАНЯЕМ ИНФОРМАЦИЮ О ЦЕПОЧКЕ
-          sourceTransferId: sourceTransferId,
-          isInitialPurchase: false
-        };
-        
-        processedTransfers++;
-        console.log('        ➕ Добавлено на ' + toWhName + ': ' + quantity + ' ед. (ID: ' + transferId + ')');
-      } else {
-        console.log('        ❌ Не найдена исходная партия для перемещения ' + transferId);
+      // Обновляем остаток
+      if (type === 'Приход') {
+        balancesMap[component].balance += quantity;
+      } else if (type === 'Расход') {
+        balancesMap[component].balance -= quantity;
       }
-    }
-    
-    console.log('🔄 Обработано перемещений: ' + processedTransfers);
-
-    // ========== 3. ОБРАБОТКА СПИСАНИЙ ==========
-    console.log('\n📋 ЭТАП 3: ОБРАБОТКА СПИСАНИЙ');
-    var processedWriteOffs = 0;
-    
-    // 🔥 ИСПРАВЛЕНИЕ: Добавляем отсутствующую переменную planningSheet
-    var planningSheet = spreadsheet.getSheetByName(PLANNING_SHEET);
-    
-    if (planningSheet.getLastRow() > 1) {
-      var planningData = planningSheet.getRange('A2:J' + planningSheet.getLastRow()).getValues();
       
-      for (var p = 0; p < planningData.length; p++) {
-        var pRow = planningData[p];
-        var product = pRow[3];
-        var quantity = roundToTwo(pRow[7] || 0);
-        var status = pRow[8];
+      // Сохраняем историю
+      balancesMap[component].transfers.push({
+        id: transferId,
+        date: transfer[2],
+        type: type,
+        quantity: quantity,
+        balanceAfter: balancesMap[component].balance
+      });
+      
+      balancesMap[component].lastTransferId = transferId;
+    });
+    
+    // 6. Обновляем складской лист
+    var updates = [];
+    var currentTime = new Date();
+    
+    warehouseData.forEach(function(row, index) {
+      var component = row[NEW_WAREHOUSE_STRUCTURE.COMPONENT];
+      
+      if (component && balancesMap[component]) {
+        // Обновляем остаток
+        row[NEW_WAREHOUSE_STRUCTURE.CURRENT_STOCK] = balancesMap[component].balance;
         
-        if (!product || quantity <= 0 || status !== '✅ Выполнено') {
-          continue;
-        }
+        // Обновляем статус
+        row[NEW_WAREHOUSE_STRUCTURE.STATUS] = 'Пересчитано ' + 
+          Utilities.formatDate(currentTime, Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
         
-        var itemsPerBox = getItemsPerBox(product);
-        var totalItems = roundToTwo(quantity * itemsPerBox);
-        var consumptionRates = getConsumptionRatesForProduct(product);
-        
-        console.log('    📦 Списание: ' + product + ' × ' + quantity + ' кор. (' + totalItems + ' шт.)');
-        
-        // Списываем с производства
-        for (var component in consumptionRates) {
-          if (consumptionRates.hasOwnProperty(component)) {
-            var needed = roundToTwo(consumptionRates[component] * totalItems);
-            console.log('        🔧 Компонент ' + component + ': требуется ' + needed + ' ед.');
-            
-            // 🔥 ИСПРАВЛЕНИЕ: СПИСЫВАЕМ С ПРОИЗВОДСТВА ПО ФИФО
-            var remainingNeeded = needed;
-            var componentBatches = getComponentBatchesSortedByDateFromData(warehouseData['Производство'], component);
-            
-            for (var k = 0; k < componentBatches.length && remainingNeeded > 0; k++) {
-              var batchInfo = componentBatches[k];
-              var availableInBatch = roundToTwo(batchInfo.quantity);
-              var toWriteOff = roundToTwo(Math.min(remainingNeeded, availableInBatch));
-              
-              if (toWriteOff > 0) {
-                batchInfo.quantity = roundToTwo(availableInBatch - toWriteOff);
-                remainingNeeded = roundToTwo(remainingNeeded - toWriteOff);
-                processedWriteOffs++;
-                
-                console.log('           ➖ Списано ' + component + ': ' + toWriteOff + 
-                           ' из партии ' + batchInfo.transferId + ' (осталось списать: ' + remainingNeeded + ')');
-              }
-            }
-          }
+        // Обновляем ID последнего перемещения
+        if (balancesMap[component].lastTransferId) {
+          row[NEW_WAREHOUSE_STRUCTURE.TRANSFER_ID] = balancesMap[component].lastTransferId;
         }
       }
+      
+      updates.push(row);
+    });
+    
+    // 7. Записываем обновления пачкой
+    if (updates.length > 0) {
+      warehouseSheet.getRange(2, 1, updates.length, 6).setValues(updates);
     }
     
-    console.log('📋 Обработано списаний: ' + processedWriteOffs);
-
-    // ========== 4. ЗАПИСЬ РЕЗУЛЬТАТОВ С СОХРАНЕНИЕМ ЦЕПОЧКИ ==========
-    console.log('\n💾 ЭТАП 4: ЗАПИСЬ РЕЗУЛЬТАТОВ С СОХРАНЕНИЕМ ЦЕПОЧКИ');
+    // 8. Очищаем кэш цепочек
+    TRANSFER_CHAIN_CACHE = {};
+    CacheService.getScriptCache().remove('transfer_chains');
     
-    // 🔥 ИСПРАВЛЕНИЕ: Добавляем отсутствующие переменные
-    var mainSheet = spreadsheet.getSheetByName(MAIN_WAREHOUSE_SHEET);
-    var productionSheet = spreadsheet.getSheetByName(PRODUCTION_WAREHOUSE_SHEET);
+    // 9. Логируем результат
+    var componentsCount = Object.keys(balancesMap).length;
+    logToSheet('INFO', 'fastRecalculateBalancesWithTransferChain',
+      'Успешный пересчет остатков для ' + componentsCount + ' компонентов');
     
-    updateWarehouseSheetsWithTransferChain(mainSheet, productionSheet, warehouseData);
+    // 10. Показываем результат
+    ui.alert('✅ Пересчет завершен',
+      'Успешно пересчитаны остатки для ' + componentsCount + ' компонентов.\n\n' +
+      'Обновлено записей: ' + updates.length + '\n' +
+      'Время выполнения: ' + (new Date() - currentTime) / 1000 + ' сек.',
+      ui.ButtonSet.OK);
     
-    // ========== 5. СОРТИРОВКА И ОБНОВЛЕНИЕ СТАТУСОВ ==========
-    console.log('\n🔄 ЭТАП 5: СОРТИРОВКА И ОБНОВЛЕНИЕ СТАТУСОВ');
-    sortWarehouseByDate(mainSheet);
-    sortWarehouseByDate(productionSheet);
-    updateWarehouseStatusDirect(mainSheet, true);
-    updateWarehouseStatusDirect(productionSheet, true);
-    
-    var endTime = new Date().getTime();
-    var duration = (endTime - startTime) / 1000;
-    
-    console.log('✅ ПЕРЕСЧЕТ С СОХРАНЕНИЕМ ЦЕПОЧКИ ПЕРЕМЕЩЕНИЙ ЗАВЕРШЕН ЗА ' + duration + ' СЕКУНД');
-    
-    // Показываем отчет
-    // 🔥 ИСПРАВЛЕНИЕ: Используем правильную переменную transferMaps
-    showTransferChainRecalculationReport(warehouseData, duration, transferMaps);
+    return {
+      success: true,
+      components: componentsCount,
+      updated: updates.length
+    };
     
   } catch (error) {
-    console.error('❌ ОШИБКА ПЕРЕСЧЕТА С ЦЕПОЧКОЙ: ' + error.toString());
-    SpreadsheetApp.getUi().alert('❌ Ошибка пересчета', error.toString(), SpreadsheetApp.getUi().ButtonSet.OK);
+    logToSheet('ERROR', 'fastRecalculateBalancesWithTransferChain',
+      'Критическая ошибка: ' + error.message + '\n' + error.stack);
+    
+    SpreadsheetApp.getUi().alert('❌ Ошибка пересчета',
+      'Произошла ошибка при пересчете остатков:\n\n' +
+      error.message + '\n\n' +
+      'Проверьте логи для подробностей.',
+      SpreadsheetApp.getUi().ButtonSet.OK);
+    
+    return {
+      success: false,
+      error: error.message
+    };
   }
 }
 
