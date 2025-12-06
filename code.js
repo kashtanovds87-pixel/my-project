@@ -6695,3 +6695,43 @@ function getChronologicallySortedTransfers(transferMaps) {
     return [];
   }
 }
+
+/**
+ * Возвращает хронологически отсортированные перемещения для конкретного компонента
+ * @param {string} componentName - Название компонента
+ * @param {Array} allTransfers - Все перемещения (если не передано, берется из листа)
+ * @returns {Array} Отсортированные по дате перемещения
+ */
+function getChronologicallySortedTransfers(componentName, allTransfers) {
+  try {
+    // Если не переданы все перемещения, загружаем их
+    if (!allTransfers || allTransfers.length === 0) {
+      var transfersSheet = SpreadsheetApp.getActiveSpreadsheet()
+        .getSheetByName(TRANSFERS_SHEET);
+      var lastRow = transfersSheet.getLastRow();
+      
+      if (lastRow <= 1) return []; // Нет данных
+      
+      allTransfers = transfersSheet.getRange(2, 1, lastRow - 1, 8)
+        .getValues()
+        .filter(row => row[0]); // Фильтруем пустые строки
+    }
+    
+    // Фильтруем по компоненту и сортируем по дате
+    var componentTransfers = allTransfers.filter(function(row) {
+      return row[3] === componentName; // COMPONENT в колонке D (индекс 3)
+    });
+    
+    // Сортировка по дате (колонка C - индекс 2)
+    componentTransfers.sort(function(a, b) {
+      return new Date(a[2]) - new Date(b[2]);
+    });
+    
+    return componentTransfers;
+    
+  } catch (error) {
+    logToSheet('ERROR', 'getChronologicallySortedTransfers', 
+      'Ошибка при сортировке перемещений: ' + error.message);
+    return [];
+  }
+}
