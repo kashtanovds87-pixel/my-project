@@ -6895,3 +6895,31 @@ function getOrCreateBackupsFolder() {
     return null;
   }
 }
+
+/**
+ * Простая проверка данных для пересчета
+ */
+function validateRecalculationData() {
+  var errors = [];
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Проверяем обязательные листы
+  var requiredSheets = [
+    { name: MAIN_WAREHOUSE_SHEET, description: 'Склад Главный' },
+    { name: TRANSFERS_SHEET, description: 'Перемещения' }
+  ];
+  
+  requiredSheets.forEach(function(sheet) {
+    var sheetObj = spreadsheet.getSheetByName(sheet.name);
+    if (!sheetObj) {
+      errors.push('Отсутствует лист: ' + sheet.description);
+    } else if (sheetObj.getLastRow() <= 1) {
+      errors.push('Лист "' + sheet.description + '" пустой или содержит только заголовки');
+    }
+  });
+  
+  return {
+    valid: errors.length === 0,
+    errors: errors
+  };
+}
