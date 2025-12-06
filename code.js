@@ -6653,3 +6653,83 @@ function createBackupBeforeRecalculation() {
     return { success: false, error: error.message };
   }
 }
+
+/**
+ * Логирование событий в специальный лист
+ * @param {string} level - Уровень (INFO, WARNING, ERROR)
+ * @param {string} functionName - Название функции
+ * @param {string} message - Сообщение
+ * @param {Object} extraData - Дополнительные данные (опционально)
+ */
+function logToSheet(level, functionName, message, extraData) {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var logSheet = spreadsheet.getSheetByName('Системные_Логи');
+    
+    // Если листа нет - создаем
+    if (!logSheet) {
+      logSheet = spreadsheet.insertSheet('Системные_Логи');
+      logSheet.getRange(1, 1, 1, 5).setValues([[
+        'Дата/Время', 'Уровень', 'Функция', 'Сообщение', 'Доп. данные'
+      ]]);
+      logSheet.getRange(1, 1, 1, 5).setFontWeight('bold');
+      logSheet.setFrozenRows(1);
+    }
+    
+    // Подготавливаем данные для записи
+    var timestamp = Utilities.formatDate(
+      new Date(), 
+      Session.getScriptTimeZone(), 
+      'dd.MM.yyyy HH:mm:ss'
+    );
+    
+    var extraDataStr = '';
+    if (extraData) {
+      try {
+        extraDataStr = JSON.stringify(extraData);
+      } catch (e) {
+        extraDataStr = String(extraData);
+      }
+    }
+    
+    // Добавляем запись
+    var lastRow = logSheet.getLastRow();
+    logSheet.getRange(lastRow + 1, 1, 1, 5).setValues([[
+      timestamp,
+      level,
+      functionName,
+      message,
+      extraDataStr
+    ]]);
+    
+    // Автоматическое форматирование строк в зависимости от уровня
+    var range = logSheet.getRange(lastRow + 1, 1, 1, 5);
+    
+    switch(level) {
+      case 'ERROR':
+        range.setBackground('#ffebee'); // Красный фон для ошибок
+        range.setFontColor('#d32f2f');
+        break;
+      case 'WARNING':
+        range.setBackground('#fff3e0'); // Оранжевый фон для предупреждений
+        range.setFontColor('#f57c00');
+        break;
+      case 'INFO':
+        range.setBackground('#e8f5e9'); // Зеленый фон для информации
+        break;
+    }
+    
+    // Ограничиваем количество записей (макс. 1000 строк)
+    if (lastRow > 1000) {
+      logSheet.deleteRow(2); // Удаляем самую старую запись
+    }
+    
+    // Также выводим в консоль для отладки
+    console.log('[' + level + '] ' + functionName + ': ' + message);
+    
+  } catch (error) {
+    // Если логирование сломалось, пишем хотя бы в консоль
+    console.error('Ошибка в logToSheet:', error);
+    console.log('Исходное сообщение: [' + level + '] ' + functionName + ': ' + message);
+  }
+}
