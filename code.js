@@ -6632,27 +6632,59 @@ function validateDataBeforeRecalculation() {
 function createBackupBeforeRecalculation() {
   try {
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    var backupName = spreadsheet.getName() + ' - Резервная копия ' + 
-      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH-mm');
+    var timestamp = Utilities.formatDate(
+      new Date(), 
+      Session.getScriptTimeZone(), 
+      'yyyy-MM-dd HH-mm'
+    );
+    
+    var originalName = spreadsheet.getName();
+    var backupName = originalName + ' - Резервная копия ' + timestamp;
     
     // Создаем копию файла
-    var backupFile = DriveApp.getFileById(spreadsheet.getId()).makeCopy(backupName);
+    var originalFile = DriveApp.getFileById(spreadsheet.getId());
+    var backupFile = originalFile.makeCopy(backupName);
     
+    // Перемещаем в папку с бэкапами (если есть)
+    try {
+      var backupsFolder = getOrCreateBackupsFolder();
+      if (backupsFolder) {
+        backupFile.moveTo(backupsFolder);
+      }
+    } catch (folderError) {
+      // Игнорируем ошибки с папкой, файл все равно создан
+    }
+    
+    // Используем нашу новую функцию логирования
     logToSheet('INFO', 'createBackupBeforeRecalculation',
-      'Создана резервная копия: ' + backupFile.getUrl());
+      'Создана резервная копия', {
+        backupName: backupName,
+        backupId: backupFile.getId(),
+        backupUrl: backupFile.getUrl()
+      });
     
     return {
       success: true,
-      url: backupFile.getUrl(),
-      name: backupName
+      name: backupName,
+      id: backupFile.getId(),
+      url: backupFile.getUrl()
     };
     
   } catch (error) {
-    logToSheet('WARNING', 'createBackupBeforeRecalculation',
-      'Не удалось создать резервную копию: ' + error.message);
-    return { success: false, error: error.message };
+    // Используем нашу функцию логирования
+    logToSheet('ERROR', 'createBackupBeforeRecalculation',
+      'Не удалось создать резервную копию: ' + error.message, {
+        error: error.toString(),
+        stack: error.stack
+      });
+    
+    return { 
+      success: false, 
+      error: error.message 
+    };
   }
 }
+
 
 /**
  * Логирование событий в специальный лист
