@@ -6765,3 +6765,24 @@ function logToSheet(level, functionName, message, extraData) {
     console.log('Исходное сообщение: [' + level + '] ' + functionName + ': ' + message);
   }
 }
+
+/**
+ * Находит или создает папку для бэкапов
+ */
+function getOrCreateBackupsFolder() {
+  try {
+    var folderName = 'Бэкапы системы учета';
+    var folders = DriveApp.getFoldersByName(folderName);
+    
+    if (folders.hasNext()) {
+      return folders.next();
+    } else {
+      // Создаем новую папку
+      return DriveApp.createFolder(folderName);
+    }
+  } catch (error) {
+    logToSheet('WARNING', 'getOrCreateBackupsFolder',
+      'Не удалось создать папку для бэкапов: ' + error.message);
+    return null;
+  }
+}
