@@ -4979,34 +4979,48 @@ function showRecalculationReport(warehouseBalances) {
 }
 
 /**
- *  🔄 БЕЗОПАСНЫЙ ПЕРЕСЧЕТ С УСКОРЕННОЙ ЛОГИКОЙ
+ * Безопасный запуск полного пересчета остатков
  */
 function safeRecalculateWarehouseBalances() {
-  try {
-    var ui = SpreadsheetApp.getUi();
-    var response = ui.alert(
-      '⚠️ Безопасный пересчет остатков',
-      'Это действие пересчитает все остатки на складах.\n\n' +
-      '✅ Учитываются все закупки за весь период\n' +
-      '✅ Учитываются все перемещения между складами\n' +
-      '✅ Сохраняются уникальные ID перемещений\n' +
-      '✅ Правильно передаются даты поступления\n' +
-      '✅ Сортировка по дате (от старых к новым)\n\n' +
-      'Продолжить?',
-      ui.ButtonSet.YES_NO
-    );
-    
-    if (response !== ui.Button.YES) {
-      return;
-    }
-    
-    // Запускаем ускоренный пересчет с учетом перемещений
-    fastRecalculateBalancesWithTransferChain();
-    
-  } catch (error) {
-    console.error('❌ Ошибка безопасного пересчета: ' + error.toString());
-    ui.alert('❌ Ошибка', 'Не удалось выполнить пересчет: ' + error.toString(), ui.ButtonSet.OK);
+  var ui = SpreadsheetApp.getUi();
+  
+  // 1. Запрашиваем подтверждение
+  var response = ui.alert('🔐 Полный пересчет остатков',
+    'Вы уверены, что хотите выполнить полный пересчет остатков?\n\n' +
+    '⚠️  ВНИМАНИЕ:\n' +
+    '• Это может занять несколько минут\n' +
+    '• Не закрывайте таблицу во время выполнения\n' +
+    '• Рекомендуется создать резервную копию\n\n' +
+    'Создать резервную копию перед началом?',
+    ui.ButtonSet.YES_NO_CANCEL);
+  
+  if (response === ui.Button.CANCEL) {
+    return { cancelled: true };
   }
+  
+  // 2. Создаем резервную копию, если пользователь согласен
+  if (response === ui.Button.YES) {
+    var backupResult = createBackupBeforeRecalculation();
+    if (!backupResult.success) {
+      ui.alert('⚠️  Внимание',
+        'Не удалось создать резервную копию:\n' + backupResult.error + '\n\n' +
+        'Продолжить без резервной копии?',
+        ui.ButtonSet.YES_NO);
+    }
+  }
+  
+  // 3. Проверяем данные
+  var validation = validateDataBeforeRecalculation();
+  if (!validation.isValid) {
+    ui.alert('❌ Проверка данных не пройдена',
+      'Обнаружены проблемы:\n\n' + validation.issues.join('\n') + 
+      '\n\nИсправьте проблемы и повторите попытку.',
+      ui.ButtonSet.OK);
+    return { success: false, issues: validation.issues };
+  }
+  
+  // 4. Запускаем пересчет
+  return fastRecalculateBalancesWithTransferChain();
 }
 
 /**
