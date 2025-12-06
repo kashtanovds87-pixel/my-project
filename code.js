@@ -6582,3 +6582,60 @@ function getChronologicallySortedTransfers(componentName, allTransfers) {
     return [];
   }
 }
+
+/**
+ * Валидация данных перед пересчетом
+ */
+function validateDataBeforeRecalculation() {
+  var issues = [];
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Проверяем существование листов
+  var requiredSheets = [
+    MAIN_WAREHOUSE_SHEET,
+    TRANSFERS_SHEET,
+    PURCHASES_SHEET
+  ];
+  
+  requiredSheets.forEach(function(sheetName) {
+    var sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) {
+      issues.push('Отсутствует лист: ' + sheetName);
+    } else if (sheet.getLastRow() <= 1) {
+      issues.push('Лист пустой: ' + sheetName);
+    }
+  });
+  
+  return {
+    isValid: issues.length === 0,
+    issues: issues
+  };
+}
+
+/**
+ * Создает резервную копию перед пересчетом
+ */
+function createBackupBeforeRecalculation() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var backupName = spreadsheet.getName() + ' - Резервная копия ' + 
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH-mm');
+    
+    // Создаем копию файла
+    var backupFile = DriveApp.getFileById(spreadsheet.getId()).makeCopy(backupName);
+    
+    logToSheet('INFO', 'createBackupBeforeRecalculation',
+      'Создана резервная копия: ' + backupFile.getUrl());
+    
+    return {
+      success: true,
+      url: backupFile.getUrl(),
+      name: backupName
+    };
+    
+  } catch (error) {
+    logToSheet('WARNING', 'createBackupBeforeRecalculation',
+      'Не удалось создать резервную копию: ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
