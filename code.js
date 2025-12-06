@@ -5192,141 +5192,255 @@ function createBackup() {
 }
 
 /**
- * Полный пересчет остатков с учетом цепочек перемещений (исправленная версия)
+ * Полный пересчет остатков с учетом цепочек перемещений (ИСПРАВЛЕННАЯ версия)
  */
 function fastRecalculateBalancesWithTransferChain() {
   try {
+    console.log('=== НАЧАЛО ПЕРЕСЧЕТА ОСТАТКОВ ===');
+    
     var ui = SpreadsheetApp.getUi();
     var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
     
-    // Блокируем интерфейс на время выполнения
-    ui.alert('🔄 Пересчет остатков', 
-      'Начался полный пересчет остатков. Это может занять несколько минут.\n\n' +
-      'Не закрывайте таблицу и не вносите изменения во время расчета.',
-      ui.ButtonSet.OK);
-    
-    // 1. Получаем все данные
+    // 1. ПРОВЕРЯЕМ НАЛИЧИЕ ЛИСТОВ
     var warehouseSheet = spreadsheet.getSheetByName(MAIN_WAREHOUSE_SHEET);
     var transfersSheet = spreadsheet.getSheetByName(TRANSFERS_SHEET);
-    var purchasesSheet = spreadsheet.getSheetByName(PURCHASES_SHEET);
     
+    if (!warehouseSheet || !transfersSheet) {
+      throw new Error('Не найдены необходимые листы: ' + 
+        (!warehouseSheet ? MAIN_WAREHOUSE_SHEET + ' ' : '') + 
+        (!transfersSheet ? TRANSFERS_SHEET : ''));
+    }
+    
+    // 2. ПОЛУЧАЕМ ДАННЫЕ
     var lastWarehouseRow = warehouseSheet.getLastRow();
     var lastTransferRow = transfersSheet.getLastRow();
-    var lastPurchaseRow = purchasesSheet.getLastRow();
     
-    // 2. Загружаем данные пачками
-    var warehouseData = lastWarehouseRow > 1 ? 
-      warehouseSheet.getRange(2, 1, lastWarehouseRow - 1, 6).getValues() : [];
-    var transfersData = lastTransferRow > 1 ? 
-      transfersSheet.getRange(2, 1, lastTransferRow - 1, 8).getValues() : [];
-    var purchasesData = lastPurchaseRow > 1 ? 
-      purchasesSheet.getRange(2, 1, lastPurchaseRow - 1, 10).getValues() : [];
+    console.log('Строк на складе:', lastWarehouseRow);
+    console.log('Строк перемещений:', lastTransferRow);
     
-    // 3. Создаем карту остатков
-    var balancesMap = {};
+    // Если нет данных
+    if (lastWarehouseRow <= 1 && lastTransferRow <= 1) {
+      ui.alert('ℹ️ Нет данных', 'Нет данных для пересчета', ui.ButtonSet.OK);
+      return { success: true, message: 'Нет данных' };
+    }
     
-    // 4. Обрабатываем каждое перемещение в хронологическом порядке
-    // Сначала сортируем все перемещения по дате
+    // 3. ЗАГРУЗКА ДАННЫХ (ВНИМАНИЕ: правильные колонки!)
+    var warehouseData = [];
+    var transfersData = [];
+    
+    if (lastWarehouseRow > 1) {
+      // Берем только нужные колонки: A-F (6 колонок)
+      warehouseData = warehouseSheet.getRange(2, 1, lastWarehouseRow - 1, 6).getValues();
+      console.log('Загружено записей со склада:', warehouseData.length);
+    }
+    
+    if (lastTransferRow > 1) {
+      // Берем колонки: A-H (8 колонок)
+      transfersData = transfersSheet.getRange(2, 1, lastTransferRow - 1, 8).getValues();
+      console.log('Загружено перемещений:', transfersData.length);
+    }
+    
+    // 4. СОРТИРОВКА ПЕРЕМЕЩЕНИЙ ПО ДАТЕ
     transfersData.sort(function(a, b) {
-      return new Date(a[2]) - new Date(b[2]); // Дата в колонке C
+      var dateA = a[2] instanceof Date ? a[2] : new Date(a[2]); // Колонка C
+      var dateB = b[2] instanceof Date ? b[2] : new Date(b[2]);
+      return dateA - dateB;
     });
     
-    // 5. Пересчитываем остатки
-    transfersData.forEach(function(transfer, index) {
-      var component = transfer[3]; // Название компонента
-      var quantity = Number(transfer[4]) || 0; // Количество
-      var type = transfer[5]; // Тип операции (приход/расход)
-      var transferId = transfer[0]; // ID перемещения
+    // 5. РАСЧЕТ ОСТАТКОВ
+    var balancesMap = {};
+    var processedCount = 0;
+    
+    for (var i = 0; i < transfersData.length; i++) {
+      var transfer = transfersData[i];
       
-      if (!component) return;
+      // ВАЖНО: Правильные индексы для листа перемещений!
+      // A=0: ID, B=1: ID закупки, C=2: Дата, D=3: Компонент, E=4: Количество, F=5: Тип
+      var component = transfer[3]; // Колонка D - Комплектующие
+      var quantity = parseFloat(transfer[4]); // Колонка E - Количество
+      var type = transfer[5]; // Колонка F - Тип операции
       
-      // Инициализируем запись для компонента
+      // Проверяем данные
+      if (!component || component.toString().trim() === '') {
+        console.log('Пропущено: нет компонента в строке', i + 2);
+        continue;
+      }
+      
+      if (isNaN(quantity) || quantity <= 0) {
+        console.log('Пропущено: некорректное количество', component, quantity);
+        continue;
+      }
+      
+      if (!type || (type !== 'Приход' && type !== 'Расход')) {
+        console.log('Пропущено: некорректный тип операции', component, type);
+        continue;
+      }
+      
+      // Инициализируем компонент
       if (!balancesMap[component]) {
         balancesMap[component] = {
           balance: 0,
-          transfers: [],
-          lastTransferId: ''
+          firstDate: transfer[2],
+          lastDate: transfer[2],
+          lastTransferId: transfer[0],
+          incomeCount: 0,
+          outcomeCount: 0
         };
       }
       
       // Обновляем остаток
       if (type === 'Приход') {
         balancesMap[component].balance += quantity;
+        balancesMap[component].incomeCount++;
       } else if (type === 'Расход') {
         balancesMap[component].balance -= quantity;
+        balancesMap[component].outcomeCount++;
       }
       
-      // Сохраняем историю
-      balancesMap[component].transfers.push({
-        id: transferId,
-        date: transfer[2],
-        type: type,
-        quantity: quantity,
-        balanceAfter: balancesMap[component].balance
-      });
+      // Обновляем даты
+      balancesMap[component].lastDate = transfer[2];
+      balancesMap[component].lastTransferId = transfer[0];
       
-      balancesMap[component].lastTransferId = transferId;
-    });
+      processedCount++;
+    }
     
-    // 6. Обновляем складской лист
+    console.log('Обработано перемещений:', processedCount);
+    console.log('Уникальных компонентов:', Object.keys(balancesMap).length);
+    
+    // 6. ОБНОВЛЕНИЕ СКЛАДА (ВНИМАНИЕ: правильные индексы!)
     var updates = [];
+    var updateCount = 0;
     var currentTime = new Date();
+    var timestamp = Utilities.formatDate(currentTime, Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
     
-    warehouseData.forEach(function(row, index) {
-      var component = row[NEW_WAREHOUSE_STRUCTURE.COMPONENT];
+    for (var j = 0; j < warehouseData.length; j++) {
+      var row = warehouseData[j];
+      var component = row[3]; // Колонка D - Комплектующие
       
-      if (component && balancesMap[component]) {
-        // Обновляем остаток
-        row[NEW_WAREHOUSE_STRUCTURE.CURRENT_STOCK] = balancesMap[component].balance;
-        
-        // Обновляем статус
-        row[NEW_WAREHOUSE_STRUCTURE.STATUS] = 'Пересчитано ' + 
-          Utilities.formatDate(currentTime, Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
-        
-        // Обновляем ID последнего перемещения
-        if (balancesMap[component].lastTransferId) {
-          row[NEW_WAREHOUSE_STRUCTURE.TRANSFER_ID] = balancesMap[component].lastTransferId;
+      if (component && component.toString().trim() !== '') {
+        if (balancesMap[component]) {
+          var oldStock = row[4]; // Колонка E - Текущий остаток
+          var newStock = balancesMap[component].balance;
+          
+          // Обновляем если изменилось
+          if (oldStock !== newStock) {
+            row[4] = newStock; // Обновляем остаток (колонка E)
+            row[5] = 'Пересчитано ' + timestamp; // Колонка F - Статус
+            
+            // Обновляем ID последнего перемещения если есть
+            if (balancesMap[component].lastTransferId) {
+              row[0] = balancesMap[component].lastTransferId; // Колонка A
+            }
+            
+            updateCount++;
+            
+            console.log('Обновлен:', component, 'было:', oldStock, 'стало:', newStock);
+          }
+          
+          // Удаляем из карты, чтобы потом не добавлять снова
+          delete balancesMap[component];
+        } else {
+          // Компонент есть на складе, но нет перемещений
+          row[4] = 0; // Обнуляем остаток
+          row[5] = 'Нет перемещений';
+          updateCount++;
+          
+          console.log('Обнулен (нет перемещений):', component);
         }
       }
       
       updates.push(row);
-    });
-    
-    // 7. Записываем обновления пачкой
-    if (updates.length > 0) {
-      warehouseSheet.getRange(2, 1, updates.length, 6).setValues(updates);
     }
     
-    // 8. Очищаем кэш цепочек
+    // 7. ДОБАВЛЕНИЕ НОВЫХ КОМПОНЕНТОВ
+    var newRows = [];
+    var addedCount = 0;
+    
+    for (var component in balancesMap) {
+      if (balancesMap.hasOwnProperty(component)) {
+        var balance = balancesMap[component];
+        
+        // Добавляем только если есть положительный остаток
+        if (balance.balance > 0) {
+          newRows.push([
+            balance.lastTransferId || '', // A: ID перемещения
+            '', // B: ID закупки (пока пусто)
+            balance.lastDate || currentTime, // C: Дата
+            component, // D: Комплектующие
+            balance.balance, // E: Остаток
+            'Автодобавлен ' + timestamp // F: Статус
+          ]);
+          addedCount++;
+          
+          console.log('Добавлен новый:', component, 'остаток:', balance.balance);
+        }
+      }
+    }
+    
+    // 8. ЗАПИСЬ ИЗМЕНЕНИЙ
+    if (updates.length > 0) {
+      warehouseSheet.getRange(2, 1, updates.length, 6).setValues(updates);
+      console.log('Обновлено строк:', updateCount);
+    }
+    
+    if (newRows.length > 0) {
+      var startRow = Math.max(2, lastWarehouseRow + 1);
+      warehouseSheet.getRange(startRow, 1, newRows.length, 6).setValues(newRows);
+      console.log('Добавлено новых строк:', addedCount);
+    }
+    
+    // 9. ОЧИСТКА КЭША
     TRANSFER_CHAIN_CACHE = {};
     CacheService.getScriptCache().remove('transfer_chains');
     
-    // 9. Логируем результат
-    var componentsCount = Object.keys(balancesMap).length;
-    logToSheet('INFO', 'fastRecalculateBalancesWithTransferChain',
-      'Успешный пересчет остатков для ' + componentsCount + ' компонентов');
+    // 10. ОТЧЕТ
+    var endTime = new Date();
+    var duration = (endTime - currentTime) / 1000;
+    var totalComponents = Object.keys(balancesMap).length + (warehouseData.length - updateCount);
     
-    // 10. Показываем результат
-    ui.alert('✅ Пересчет завершен',
-      'Успешно пересчитаны остатки для ' + componentsCount + ' компонентов.\n\n' +
-      'Обновлено записей: ' + updates.length + '\n' +
-      'Время выполнения: ' + (new Date() - currentTime) / 1000 + ' сек.',
-      ui.ButtonSet.OK);
+    var resultMessage = '✅ ПЕРЕСЧЕТ ЗАВЕРШЕН!\n\n' +
+      'Время выполнения: ' + duration.toFixed(2) + ' сек.\n' +
+      'Обработано перемещений: ' + processedCount + '\n' +
+      'Обновлено записей: ' + updateCount + '\n' +
+      'Добавлено новых: ' + addedCount + '\n' +
+      'Всего компонентов в системе: ' + totalComponents;
+    
+    // 11. ЛОГИРОВАНИЕ
+    logToSheet('INFO', 'fastRecalculateBalancesWithTransferChain',
+      'Пересчет завершен: ' + updateCount + ' обновлено, ' + addedCount + ' добавлено', {
+        duration: duration,
+        processed: processedCount,
+        updated: updateCount,
+        added: addedCount,
+        total: totalComponents
+      });
+    
+    // 12. ПОКАЗЫВАЕМ РЕЗУЛЬТАТ
+    ui.alert('📊 Отчет о пересчете', resultMessage, ui.ButtonSet.OK);
+    
+    console.log('=== ПЕРЕСЧЕТ ЗАВЕРШЕН ===');
     
     return {
       success: true,
-      components: componentsCount,
-      updated: updates.length
+      processed: processedCount,
+      updated: updateCount,
+      added: addedCount,
+      total: totalComponents,
+      duration: duration
     };
     
   } catch (error) {
+    console.error('Ошибка в fastRecalculateBalancesWithTransferChain:', error);
+    
     logToSheet('ERROR', 'fastRecalculateBalancesWithTransferChain',
-      'Критическая ошибка: ' + error.message + '\n' + error.stack);
+      'Критическая ошибка: ' + error.message, {
+        stack: error.stack
+      });
     
     SpreadsheetApp.getUi().alert('❌ Ошибка пересчета',
       'Произошла ошибка при пересчете остатков:\n\n' +
       error.message + '\n\n' +
-      'Проверьте логи для подробностей.',
+      'Проверьте консоль и логи для подробностей.',
       SpreadsheetApp.getUi().ButtonSet.OK);
     
     return {
