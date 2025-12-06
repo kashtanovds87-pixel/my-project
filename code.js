@@ -4984,13 +4984,13 @@ function showRecalculationReport(warehouseBalances) {
  */
 function safeRecalculateWarehouseBalances() {
   try {
+    console.log('=== БЕЗОПАСНЫЙ ПЕРЕСЧЕТ: НАЧАЛО ===');
+    
     var ui = SpreadsheetApp.getUi();
+    var startTime = new Date();
     
-    // Записываем в лог начало операции
-    logToSheet('INFO', 'safeRecalculateWarehouseBalances', 'Начало пересчета остатков');
-    
-    // 1. Запрашиваем подтверждение
-    var response = ui.alert('🔐 Полный пересчет остатков',
+    // 1. ЗАПРОС ПОДТВЕРЖДЕНИЯ
+    var response = ui.alert('🔐 Безопасный пересчет остатков',
       'Вы уверены, что хотите выполнить полный пересчет остатков?\n\n' +
       '⚠️  ВНИМАНИЕ:\n' +
       '• Это может занять несколько минут\n' +
@@ -5000,135 +5000,150 @@ function safeRecalculateWarehouseBalances() {
       ui.ButtonSet.YES_NO_CANCEL);
     
     if (response === ui.Button.CANCEL) {
-      logToSheet('INFO', 'safeRecalculateWarehouseBalances', 'Пересчет отменен пользователем');
-      return { 
-        success: false, 
-        cancelled: true,
-        message: 'Операция отменена пользователем' 
-      };
+      logToSheet('INFO', 'safeRecalculateWarehouseBalances', 'Пользователь отменил операцию');
+      return { cancelled: true, message: 'Операция отменена пользователем' };
     }
     
     var backupResult = null;
     
-    // 2. Создаем резервную копию, если пользователь согласен
+    // 2. СОЗДАНИЕ РЕЗЕРВНОЙ КОПИИ
     if (response === ui.Button.YES) {
-      ui.alert('📦 Создание резервной копии',
-        'Создаю резервную копию файла...',
-        ui.ButtonSet.OK);
+      ui.alert('📦 Создание резервной копии', 'Создаю резервную копию файла...', ui.ButtonSet.OK);
       
       backupResult = createBackupBeforeRecalculation();
       
-      if (backupResult.success) {
+      if (backupResult && backupResult.success) {
         ui.alert('✅ Резервная копия создана',
           'Резервная копия успешно создана:\n\n' +
           'Название: ' + backupResult.name + '\n' +
-          'Ссылка: ' + backupResult.url,
+          'Ссылка откроется в новой вкладке',
           ui.ButtonSet.OK);
+        
+        // Открываем ссылку на бэкап
+        if (backupResult.url) {
+          var htmlOutput = HtmlService
+            .createHtmlOutput('<script>window.open("' + backupResult.url + '", "_blank");</script>')
+            .setWidth(100)
+            .setHeight(50);
+          SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Открытие бэкапа...');
+        }
       } else {
         var continueWithoutBackup = ui.alert('⚠️  Внимание',
-          'Не удалось создать резервную копию:\n' + 
-          backupResult.error + '\n\n' +
+          'Не удалось создать резервную копию: ' + 
+          (backupResult ? backupResult.error : 'неизвестная ошибка') + '\n\n' +
           'Продолжить без резервной копии?',
           ui.ButtonSet.YES_NO);
         
         if (continueWithoutBackup !== ui.Button.YES) {
           logToSheet('WARNING', 'safeRecalculateWarehouseBalances', 
             'Пользователь отменил операцию из-за ошибки резервного копирования');
-          return { 
-            success: false, 
-            cancelled: true,
-            message: 'Отменено из-за ошибки резервного копирования' 
-          };
+          return { cancelled: true, message: 'Отменено из-за ошибки резервного копирования' };
         }
       }
     }
     
-    // 3. Проверяем наличие необходимых листов
-    var validation = validateRecalculationData();
-    if (!validation.valid) {
-      ui.alert('❌ Проверка данных не пройдена',
-        'Обнаружены проблемы:\n\n' + validation.errors.join('\n') + 
-        '\n\nИсправьте проблемы и повторите попытку.',
-        ui.ButtonSet.OK);
+    // 3. ПРОВЕРКА ДАННЫХ
+    ui.alert('🔍 Проверка данных', 'Проверяю целостность данных...', ui.ButtonSet.OK);
+    
+    var validation = validateDataBeforeRecalculation();
+    if (!validation.isValid) {
+      var errorMessage = 'Обнаружены проблемы:\n\n' + validation.issues.join('\n');
       
-      logToSheet('ERROR', 'safeRecalculateWarehouseBalances',
-        'Проверка данных не пройдена', { errors: validation.errors });
+      logToSheet('ERROR', 'safeRecalculateWarehouseBalances', 
+        'Проверка данных не пройдена', { issues: validation.issues });
+      
+      ui.alert('❌ Проверка данных не пройдена', errorMessage, ui.ButtonSet.OK);
       
       return { 
         success: false, 
-        errors: validation.errors 
+        errors: validation.issues 
       };
     }
     
-    // 4. Запускаем основной пересчет
-    ui.alert('🔄 Начало пересчета',
+    // 4. ЗАПУСК ОСНОВНОГО ПЕРЕСЧЕТА
+    ui.alert('🔄 Начало пересчета', 
       'Начинаю пересчет остатков...\n\n' +
       'Не закрывайте таблицу и не вносите изменения.\n' +
       'Это может занять несколько минут.',
       ui.ButtonSet.OK);
     
-    var startTime = new Date();
-    var result = fastRecalculateBalancesWithTransferChain();
+    logToSheet('INFO', 'safeRecalculateWarehouseBalances', 'Запуск основного пересчета');
+    
+    // ВАЖНО: Вызываем основную функцию пересчета!
+    var recalculationResult = fullRecalculateWarehouseBalances();
+    
+    // 5. ФОРМИРОВАНИЕ ИТОГОВОГО ОТЧЕТА
     var endTime = new Date();
     var duration = (endTime - startTime) / 1000;
     
-    // 5. Формируем отчет
-    if (result.success) {
-      var message = '✅ Пересчет успешно завершен!\n\n' +
-        'Компонентов обработано: ' + result.components + '\n' +
-        'Записей обновлено: ' + result.updated + '\n' +
-        'Время выполнения: ' + duration.toFixed(2) + ' сек.\n\n';
+    if (recalculationResult.success) {
+      var successMessage = '✅ ПЕРЕСЧЕТ УСПЕШНО ЗАВЕРШЕН!\n\n' +
+        'Время выполнения: ' + duration.toFixed(2) + ' сек.\n' +
+        'Обработано перемещений: ' + recalculationResult.processedTransfers + '\n' +
+        'Обновлено записей: ' + recalculationResult.updatedRows + '\n' +
+        'Добавлено новых: ' + recalculationResult.componentsAdded + '\n' +
+        'Всего компонентов: ' + recalculationResult.totalComponents + '\n\n';
       
       if (backupResult && backupResult.success) {
-        message += 'Резервная копия: ' + backupResult.name;
+        successMessage += '✅ Резервная копия создана: ' + backupResult.name;
       }
       
-      ui.alert('✅ Пересчет завершен', message, ui.ButtonSet.OK);
+      ui.alert('📊 Отчет о пересчете', successMessage, ui.ButtonSet.OK);
       
       logToSheet('INFO', 'safeRecalculateWarehouseBalances',
-        'Пересчет успешно завершен', {
-          components: result.components,
-          updated: result.updated,
+        'Безопасный пересчет успешно завершен', {
           duration: duration,
-          backupCreated: !!backupResult
+          backupCreated: !!backupResult,
+          recalculationResult: recalculationResult
         });
       
     } else {
-      ui.alert('❌ Ошибка пересчета',
+      var errorMessage = '❌ ОШИБКА ПЕРЕСЧЕТА\n\n' +
         'Во время пересчета произошла ошибка:\n\n' +
-        result.error + '\n\n' +
-        'Проверьте логи для подробностей.',
-        ui.ButtonSet.OK);
+        recalculationResult.error + '\n\n' +
+        'Время выполнения: ' + duration.toFixed(2) + ' сек.';
+      
+      if (backupResult && backupResult.success) {
+        errorMessage += '\n\n✅ Резервная копия создана: ' + backupResult.name;
+      }
+      
+      ui.alert('❌ Ошибка пересчета', errorMessage, ui.ButtonSet.OK);
       
       logToSheet('ERROR', 'safeRecalculateWarehouseBalances',
-        'Ошибка при пересчете', {
-          error: result.error,
+        'Ошибка при безопасном пересчете', {
+          error: recalculationResult.error,
           duration: duration,
           backupCreated: !!backupResult
         });
     }
     
-    return result;
+    console.log('=== БЕЗОПАСНЫЙ ПЕРЕСЧЕТ: ЗАВЕРШЕНО ===');
+    
+    return {
+      success: recalculationResult.success,
+      backup: backupResult,
+      recalculation: recalculationResult,
+      duration: duration
+    };
     
   } catch (error) {
-    // Глобальная обработка ошибок
-    var errorMessage = 'Неожиданная ошибка: ' + error.message + '\n' + error.stack;
+    console.error('Критическая ошибка в safeRecalculateWarehouseBalances:', error);
     
     logToSheet('ERROR', 'safeRecalculateWarehouseBalances',
-      'Критическая ошибка', {
-        error: error.toString(),
+      'Критическая ошибка: ' + error.message, {
         stack: error.stack
       });
     
-    ui.alert('❌ Критическая ошибка',
+    SpreadsheetApp.getUi().alert('❌ Критическая ошибка',
       'Произошла непредвиденная ошибка:\n\n' +
       error.message + '\n\n' +
       'Проверьте системные логи.',
-      ui.ButtonSet.OK);
+      SpreadsheetApp.getUi().ButtonSet.OK);
     
     return {
       success: false,
-      error: errorMessage
+      error: error.message,
+      stack: error.stack
     };
   }
 }
