@@ -14,6 +14,7 @@ var PURCHASE_ID_PREFIX = 'PUR-';                          // Генерация 
 var TRANSFER_ID_PREFIX = 'TRF-';                          // Генерация id перемещения
 var PLANNING_ID_PREFIX = 'PLN-';                          // Генерация id планирования
 var TRANSFER_CHAIN_CACHE = {};                            // Утилита для работы с цепочками перемещений
+var LOG_SHEET_NAME = 'Системные_Логи';                    // Для функции логирования
 
 var NEW_WAREHOUSE_STRUCTURE = {
   TRANSFER_ID: 0,     // A - ID перемещения
